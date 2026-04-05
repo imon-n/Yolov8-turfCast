@@ -6,11 +6,9 @@ import threading
 from ultralytics import YOLO
 import socketio
 
-# ================= CONFIG =================
 DETECT_EVERY = 1
 YOLO_FPS = 8
 SOCKET_EVERY = 6
-
 EMA_ALPHA = 0.2
 SWITCH_COOLDOWN = 3
 
@@ -21,77 +19,56 @@ NORMAL_CONF = 0.25
 LOW_CONF = 0.18
 
 NORMAL_SWITCH_THRESHOLD = 1.1
+LOW_SWITCH_THRESHOLD = 1.02
 NO_BALL_EPS = 0.02
 
-DEFAULT_CAMERA = 0
+DEFAULT_CAMERA = 0     #  DEFAULT CAMERA INDEX
+
 JPEG_QUALITY = 90
-NAMESPACE = "/"
 # =========================================
 
-# ================= LOAD COCO =================
+# Load COCO classes
 with open("utils/coco.txt", "r") as f:
     class_list = f.read().split("\n")
 
 SPORTS_BALL_ID = class_list.index("sports ball")
 
-# ================= LOAD YOLO =================
+# Load YOLO (CPU)
 model = YOLO("weights/yolov8n.pt")
 
-# ================= VIDEO INPUTS (4) =================
+# Video sources
 caps = [
-    cv2.VideoCapture("inference/videos/rc1.mp4"),
+    cv2.VideoCapture("inference/videos/cam1.mp4"),
+    cv2.VideoCapture("inference/videos/cam2.mp4"),
     cv2.VideoCapture("inference/videos/rc2.mp4"),
-    cv2.VideoCapture("inference/videos/rc3.mp4"),
-    cv2.VideoCapture("inference/videos/rc4.mp4"),
 ]
 
 if not all(c.isOpened() for c in caps):
-    print("One or more videos not found")
+    print("Video not found")
     exit()
 
-# ================= SOCKET (POLLING SAFE) =================
+# Socket.IO
 sio = socketio.Client()
-
-@sio.event
-def connect():
-    print("Socket connected (polling)")
-
-@sio.event
-def disconnect():
-    print("Socket disconnected")
-
-sio.connect(
-    "http://localhost:5000",
-    namespaces=[NAMESPACE]
-)
+sio.connect("http://localhost:5000")
+print("Connected to server")
 
 def send_best_frame(frame):
-    if not sio.connected:
-        return
-
     _, buffer = cv2.imencode(
         ".jpg", frame,
         [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
     )
-
-    sio.emit(
-        "bestFrame",
-        base64.b64encode(buffer).decode(),
-        namespace=NAMESPACE
-    )
+    sio.emit("bestFrame", base64.b64encode(buffer).decode())
 
 # ================= SHARED STATE =================
-N = len(caps)
-latest_frames = [None] * N
-ema_scores = [0.0] * N
-last_boxes = [None] * N
+latest_frames = [None] * len(caps)
+ema_scores = [0.0] * len(caps)
+last_boxes = [None] * len(caps)
 
 active_cam = DEFAULT_CAMERA
 last_switch_time = time.time()
 
 lock = threading.Lock()
 running = True
-# ==============================================
 
 # ================= CAMERA THREAD =================
 def camera_reader(idx, cap):
@@ -102,6 +79,7 @@ def camera_reader(idx, cap):
 
     while running:
         start = time.time()
+
         ret, frame = cap.read()
         if not ret:
             running = False
@@ -119,6 +97,7 @@ def camera_reader(idx, cap):
 # ================= YOLO THREAD =================
 def yolo_worker():
     global running
+
     yolo_delay = 1.0 / YOLO_FPS
     frame_id = 0
 
@@ -157,13 +136,18 @@ def yolo_worker():
                     last_boxes[i] = best_box
 
         frame_id += 1
+
         sleep = yolo_delay - (time.time() - start)
         if sleep > 0:
             time.sleep(sleep)
 
 # ================= START THREADS =================
 for i, cap in enumerate(caps):
-    threading.Thread(target=camera_reader, args=(i, cap), daemon=True).start()
+    threading.Thread(
+        target=camera_reader,
+        args=(i, cap),
+        daemon=True
+    ).start()
 
 threading.Thread(target=yolo_worker, daemon=True).start()
 
@@ -171,14 +155,15 @@ threading.Thread(target=yolo_worker, daemon=True).start()
 frame_id = 0
 
 while running:
+    frames = []
     with lock:
-        frames_raw = latest_frames.copy()
         scores = ema_scores.copy()
         boxes = last_boxes.copy()
+        frames_raw = latest_frames.copy()
 
     no_ball = all(s < NO_BALL_EPS for s in scores)
 
-    # -------- CAMERA SELECTION --------
+    # -------- DEFAULT CAMERA LOGIC --------
     if no_ball:
         active_cam = DEFAULT_CAMERA
     else:
@@ -193,37 +178,45 @@ while running:
             active_cam = best_idx
             last_switch_time = now
 
-    # -------- DRAW INPUT FRAMES --------
-    displays = []
-    for i in range(N):
+    # -------- DRAW FRAMES --------
+    for i in range(len(caps)):
         frame = frames_raw[i]
-        disp = frame.copy() if frame is not None else np.zeros(
-            (DETECT_SIZE[1], DETECT_SIZE[0], 3), np.uint8
-        )
 
-        if boxes[i]:
-            x1, y1, x2, y2 = boxes[i]
-            cv2.rectangle(disp, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        if frame is None:
+            display = np.zeros((DETECT_SIZE[1], DETECT_SIZE[0], 3), np.uint8)
+        else:
+            display = frame.copy()
+            if boxes[i]:
+                x1, y1, x2, y2 = boxes[i]
+                cv2.rectangle(display, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-        cv2.putText(disp, f"CAM {i+1}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+        frames.append(cv2.resize(display, DISPLAY_SIZE))
 
-        displays.append(cv2.resize(disp, DISPLAY_SIZE))
+    # -------- DISPLAY --------
+    # cv2.imshow("Input Videos", np.hstack(frames))
+    if len(frames) == 3:
+        row1 = np.hstack(frames[:2])
+        row2 = np.hstack([frames[2], np.zeros_like(frames[2])])
+        grid = np.vstack([row1, row2])
+    else:
+        grid = np.hstack(frames)
 
-    # -------- 2x2 GRID --------
-    top = np.hstack(displays[:2])
-    bottom = np.hstack(displays[2:])
-    cv2.imshow("Input Videos", np.vstack([top, bottom]))
+    cv2.imshow("Input Videos", grid)
 
-    # -------- BEST CAMERA --------
-    best_frame = displays[active_cam].copy()
-    cv2.putText(best_frame, f"BEST CAMERA: {active_cam+1}",
-                (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                0.8, (0, 255, 0), 2)
+    best_frame = frames[active_cam].copy()
+    status = "DEFAULT VIEW (NO BALL)" if no_ball else "TRACKING BALL"
+
+    cv2.putText(best_frame, status, (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8,
+                (0, 0, 255) if no_ball else (0, 255, 0), 2)
+
+    cv2.putText(best_frame, f"CAMERA: {active_cam + 1}",
+                (10, 60),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                (255, 0, 0), 2)
 
     cv2.imshow("Best Camera View", best_frame)
 
-    # -------- SOCKET SEND --------
     if frame_id % SOCKET_EVERY == 0:
         send_best_frame(best_frame)
 
