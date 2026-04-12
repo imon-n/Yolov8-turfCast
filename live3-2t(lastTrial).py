@@ -19,12 +19,12 @@ LOW_CONF = 0.08
 
 NORMAL_SWITCH_THRESHOLD = 1.1
 
-# 🔥 UPDATED THRESHOLD LOGIC
+# UPDATED THRESHOLD LOGIC
 NO_BALL_EPS = 500
 
 DEFAULT_CAMERA = 0
 
-# 🔥 FRAME-BASED NO BALL DETECTION
+# FRAME-BASED NO BALL DETECTION
 NO_BALL_FRAME_LIMIT = 5
 # =========================================
 
@@ -63,7 +63,7 @@ latest_frames = [None] * len(caps)
 ema_scores = [0.0] * len(caps)
 last_boxes = [None] * len(caps)
 
-# 🔥 NEW
+# NEW
 no_ball_frames = [0] * len(caps)
 
 active_cam = DEFAULT_CAMERA
@@ -133,7 +133,7 @@ def yolo_worker():
                                 best_box = (x1, y1, x2, y2)
 
                 with lock:
-                    # 🔥 FRAME COUNTER LOGIC
+                    # FRAME COUNTER LOGIC
                     if best_box is None:
                         no_ball_frames[i] += 1
                         ema_scores[i] *= 0.5   # 🔥 FAST DECAY
@@ -174,7 +174,7 @@ while running:
         frames_raw = latest_frames.copy()
         no_ball_local = no_ball_frames.copy()
 
-    # 🔥 NEW NO BALL LOGIC
+    # NEW NO BALL LOGIC
     no_ball = all(f > NO_BALL_FRAME_LIMIT for f in no_ball_local)
 
     if no_ball:
@@ -246,7 +246,6 @@ while running:
     if cv2.waitKey(1) & 0xFF == ord("q"):
         running = False
         break
-
 
 # ================= CLEANUP =================
 for cap in caps:
