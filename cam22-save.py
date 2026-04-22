@@ -1,14 +1,14 @@
 import cv2
-import base64
 import numpy as np
 import time
 import threading
+import subprocess
+from queue import Queue
 from ultralytics import YOLO
-import socketio
 
+# ================= CONFIG =================
 DETECT_EVERY = 1
 YOLO_FPS = 8
-SOCKET_EVERY = 6
 EMA_ALPHA = 0.2
 SWITCH_COOLDOWN = 3
 
@@ -19,24 +19,17 @@ NORMAL_CONF = 0.25
 LOW_CONF = 0.18
 
 NORMAL_SWITCH_THRESHOLD = 1.1
-LOW_SWITCH_THRESHOLD = 1.02
 NO_BALL_EPS = 0.02
 
-DEFAULT_CAMERA = 0     # 👈 DEFAULT CAMERA INDEX
+DEFAULT_CAMERA = 0
 
-JPEG_QUALITY = 90
-# =========================================
-
-# Load COCO classes
+# ================= LOAD =================
 with open("utils/coco.txt", "r") as f:
     class_list = f.read().split("\n")
 
 SPORTS_BALL_ID = class_list.index("sports ball")
-
-# Load YOLO (CPU)
 model = YOLO("weights/yolov8n.pt")
 
-# Video sources
 caps = [
     cv2.VideoCapture("inference/videos/cam1.mp4"),
     cv2.VideoCapture("inference/videos/cam2.mp4"),
@@ -46,19 +39,7 @@ if not all(c.isOpened() for c in caps):
     print("Video not found")
     exit()
 
-# Socket.IO
-sio = socketio.Client()
-sio.connect("http://localhost:5000")
-print("Connected to server")
-
-def send_best_frame(frame):
-    _, buffer = cv2.imencode(
-        ".jpg", frame,
-        [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
-    )
-    sio.emit("bestFrame", base64.b64encode(buffer).decode())
-
-# ================= SHARED STATE =================
+# ================= SHARED =================
 latest_frames = [None] * len(caps)
 ema_scores = [0.0] * len(caps)
 last_boxes = [None] * len(caps)
@@ -68,7 +49,46 @@ last_switch_time = time.time()
 
 lock = threading.Lock()
 running = True
-# ================================================
+
+# ================= FFmpeg =================
+# ffmpeg_cmd = [
+#     "ffmpeg",
+#     "-y",
+#     "-f", "rawvideo",
+#     "-vcodec", "rawvideo",
+#     "-pix_fmt", "bgr24",
+#     "-s", f"{DISPLAY_SIZE[0]}x{DISPLAY_SIZE[1]}",
+#     "-r", "20",
+#     "-i", "-",
+#     "-an",
+#     "-vcodec", "libx264",
+#     "-preset", "ultrafast",
+#     "-tune", "zerolatency",
+#     "-pix_fmt", "yuv420p",
+#     "best_output.mp4"
+# ]
+
+ffmpeg_cmd = [
+    r"C:\ffmpeg\bin\ffmpeg.exe",  # 👈 change this
+    "-y",
+    "-f", "rawvideo",
+    "-vcodec", "rawvideo",
+    "-pix_fmt", "bgr24",
+    "-s", f"{DISPLAY_SIZE[0]}x{DISPLAY_SIZE[1]}",
+    "-r", "20",
+    "-i", "-",
+    "-an",
+    "-vcodec", "libx264",
+    "-preset", "ultrafast",
+    "-tune", "zerolatency",
+    "-pix_fmt", "yuv420p",
+    "best_output.mp4"
+]
+
+ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE)
+
+# Queue (VERY IMPORTANT for async)
+frame_queue = Queue(maxsize=30)
 
 # ================= CAMERA THREAD =================
 def camera_reader(idx, cap):
@@ -79,8 +99,8 @@ def camera_reader(idx, cap):
 
     while running:
         start = time.time()
-
         ret, frame = cap.read()
+
         if not ret:
             running = False
             break
@@ -141,21 +161,34 @@ def yolo_worker():
         if sleep > 0:
             time.sleep(sleep)
 
+# ================= FFmpeg WRITER THREAD =================
+def ffmpeg_writer():
+    global running
+
+    while running:
+        if not frame_queue.empty():
+            frame = frame_queue.get()
+            try:
+                ffmpeg_process.stdin.write(frame.tobytes())
+            except:
+                running = False
+                break
+        else:
+            time.sleep(0.001)
+
 # ================= START THREADS =================
 for i, cap in enumerate(caps):
-    threading.Thread(
-        target=camera_reader,
-        args=(i, cap),
-        daemon=True
-    ).start()
+    threading.Thread(target=camera_reader, args=(i, cap), daemon=True).start()
 
 threading.Thread(target=yolo_worker, daemon=True).start()
+threading.Thread(target=ffmpeg_writer, daemon=True).start()
+
+print("✅ Recording started (FFmpeg ultra-fast)...")
 
 # ================= MAIN LOOP =================
-frame_id = 0
-
 while running:
     frames = []
+
     with lock:
         scores = ema_scores.copy()
         boxes = last_boxes.copy()
@@ -163,7 +196,7 @@ while running:
 
     no_ball = all(s < NO_BALL_EPS for s in scores)
 
-    # -------- DEFAULT CAMERA LOGIC --------
+    # -------- SWITCH LOGIC --------
     if no_ball:
         active_cam = DEFAULT_CAMERA
     else:
@@ -178,7 +211,7 @@ while running:
             active_cam = best_idx
             last_switch_time = now
 
-    # -------- DRAW FRAMES --------
+    # -------- DRAW --------
     for i in range(len(caps)):
         frame = frames_raw[i]
 
@@ -192,10 +225,11 @@ while running:
 
         frames.append(cv2.resize(display, DISPLAY_SIZE))
 
-    # -------- DISPLAY --------
+    # -------- SHOW --------
     cv2.imshow("Input Videos", np.hstack(frames))
 
     best_frame = frames[active_cam].copy()
+
     status = "DEFAULT VIEW (NO BALL)" if no_ball else "TRACKING BALL"
 
     cv2.putText(best_frame, status, (10, 30),
@@ -209,10 +243,12 @@ while running:
 
     cv2.imshow("Best Camera View", best_frame)
 
-    if frame_id % SOCKET_EVERY == 0:
-        send_best_frame(best_frame)
-
-    frame_id += 1
+    # ===== QUEUE WRITE (NON-BLOCKING) =====
+    if not frame_queue.full():
+        frame_queue.put(best_frame)
+    else:
+        # DROP FRAME (important for real-time)
+        pass
 
     if cv2.waitKey(1) & 0xFF == ord("q"):
         running = False
@@ -222,5 +258,8 @@ while running:
 for cap in caps:
     cap.release()
 
+ffmpeg_process.stdin.close()
+ffmpeg_process.wait()
+
 cv2.destroyAllWindows()
-sio.disconnect()
+print("Finished cleanly")

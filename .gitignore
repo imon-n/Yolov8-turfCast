@@ -4,3 +4,5 @@
 .ds_store
 *.pt
 runs
+inference
+output
