@@ -40,23 +40,16 @@ model = YOLO("weights/yolov8n.pt")
 
 
 # ================= RTSP SOURCES (3 CAM) =================
-rtsp_urls = [
-    "rtsp://admin:Stellar11@192.168.0.201:554/Streaming/Channels/101",
-    "rtsp://admin:cam2-2025@192.168.0.200:554/Streaming/Channels/101",
-    "rtsp://admin:Stellar12@192.168.0.100:554/Streaming/Channels/101",
+
+caps = [
+    cv2.VideoCapture("inference/videos/md.mp4"),
+    cv2.VideoCapture("inference/videos/lf.mp4"),
+    cv2.VideoCapture("inference/videos/rt.mp4"),  # added
 ]
 
-caps = []
-
-for url in rtsp_urls:
-    cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    caps.append(cap)
-
 if not all(c.isOpened() for c in caps):
-    print("RTSP stream not found")
+    print("Video not found")
     exit()
-
 
 # ================= SHARED STATE =================
 latest_frames = [None] * len(caps)

@@ -157,43 +157,7 @@ def yolo_worker():
         if sleep > 0:
             time.sleep(sleep)
 
-
-# # ================= OVERLAY FUNCTION =================
-# def draw_overlay(frame, cam_idx, is_default, is_tracking):
-#     overlay = frame.copy()
-#     # Semi-transparent top bar
-#     cv2.rectangle(overlay, (0, 0), (frame.shape[1], 75), (0, 0, 0), -1)
-#     cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
-#     # CAM: 1 / 2 / 3
-#     cv2.putText(frame,
-#                 f"CAM: {cam_idx + 1}",
-#                 (10, 25),
-#                 cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-#                 (255, 255, 0), 2)
-#     # Status
-#     if is_tracking:
-#         status_text = "TRACKING BALL"
-#         status_color = (0, 255, 0)      # green
-#     else:
-#         status_text = "DEFAULT VIEW"
-#         status_color = (0, 165, 255)    # orange
-
-#     cv2.putText(frame,
-#                 status_text,
-#                 (10, 55),
-#                 cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-#                 status_color, 2)
-
-#     # NO BALL — top right
-#     if not is_tracking:
-#         cv2.putText(frame,
-#                     "NO BALL",
-#                     (frame.shape[1] - 120, 25),
-#                     cv2.FONT_HERSHEY_SIMPLEX, 0.65,
-#                     (0, 0, 255), 2)
-
-#     return frame
-
+# ================= OVERLAY FUNCTION =================
 
 def draw_overlay(frame, cam_idx, is_default, is_tracking):
     # CAM: 1 / 2 / 3

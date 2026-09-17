@@ -173,21 +173,21 @@ while running:
         frames.append(cv2.resize(display, DISPLAY_SIZE))
 
     # -------- GRID DISPLAY (IMPORTANT FIX) --------
-    # h, w = DISPLAY_SIZE[1], DISPLAY_SIZE[0]
-    # blank = np.zeros((h, w, 3), dtype=np.uint8)
+    h, w = DISPLAY_SIZE[1], DISPLAY_SIZE[0]
+    blank = np.zeros((h, w, 3), dtype=np.uint8)
 
-    # grid_frames = frames.copy()
+    grid_frames = frames.copy()
 
-    # if len(grid_frames) % 2 != 0:
-    #     grid_frames.append(blank)
+    if len(grid_frames) % 2 != 0:
+        grid_frames.append(blank)
 
-    # rows = []
-    # for i in range(0, len(grid_frames), 2):
-    #     rows.append(np.hstack((grid_frames[i], grid_frames[i + 1])))
+    rows = []
+    for i in range(0, len(grid_frames), 2):
+        rows.append(np.hstack((grid_frames[i], grid_frames[i + 1])))
 
-    # grid = np.vstack(rows)
+    grid = np.vstack(rows)
 
-    # cv2.imshow("Input Videos", grid)
+    cv2.imshow("Input Videos", grid)
 
     # -------- BEST CAMERA VIEW --------
     best_frame = frames[active_cam].copy()
